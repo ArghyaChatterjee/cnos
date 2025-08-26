@@ -1,0 +1,24 @@
+{
+  "paths": {
+    "cad_path": "./datasets/mug/mesh/mug.obj",
+    "poses_path": "./src/poses/predefined_poses/obj_poses_level0.npy",
+    "templates_out": "./output/templates_obj",
+    "single_rgb_path": "./datasets/mug/images/mug_left_4053.jpg",
+    "rgb_glob": "./datasets/mug/images/*.jpg",      
+    "results_out": "./output/results"         
+  },
+  "render": {
+    "gpus_devices": "0",
+    "lighting_intensity": 0.6,
+    "radius": 0.4,
+    "intrinsics": [[572.4114, 0.0, 325.2611],
+                   [0.0, 573.57043, 242.04899],
+                   [0.0, 0.0, 1.0]],
+    "img_size": [480, 640]
+  },
+  "inference": {
+    "num_max_dets": 3,
+    "conf_threshold": 0.55,
+    "stability_score_thresh": 0.5
+  }
+}

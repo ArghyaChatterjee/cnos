@@ -7,7 +7,7 @@ channels:
   - defaults
 dependencies:
   - pip
-  - python=3.9.6
+  - python=3.10
   - pip:
     - numpy==1.26.4
     - torch
@@ -33,5 +33,6 @@ dependencies:
     - pyrender
     - wandb
     - distinctipy
+    - scikit-image==0.24.0
     - git+https://github.com/facebookresearch/hand_tracking_toolkit.git
 # bop https://github.com/thodan/bop_toolkit.git

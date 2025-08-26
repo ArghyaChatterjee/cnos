@@ -1,1 +1,2 @@
-python -m src.scripts.inference_custom --template_dir $OUTPUT_DIR --rgb_path $RGB_PATH --stability_score_thresh 0.5
+#!/usr/bin/env bash
+python -m src.scripts.inference_custom --config ./config/config.json

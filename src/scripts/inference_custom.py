@@ -22,6 +22,8 @@ from torchvision.utils import save_image
 import torchvision.transforms as T
 from src.model.utils import Detections, convert_npz_to_json
 from src.model.loss import Similarity
+import json
+from pathlib import Path
 from src.utils.inout import save_json_bop23
 import cv2
 import distinctipy
@@ -36,6 +38,10 @@ inv_rgb_transform = T.Compose(
             ),
         ]
     )
+
+def _resolve(p):
+    p = Path(p)
+    return str((Path(__file__).resolve().parents[2] / p).resolve() if not p.is_absolute() else p)
 
 def visualize(rgb, detections, save_path="./tmp/tmp.png"):
     img = rgb.copy()
@@ -151,15 +157,42 @@ def run_inference(template_dir, rgb_path, num_max_dets, conf_threshold, stabilit
     save_json_bop23(save_path+".json", detections)
     vis_img = visualize(rgb, detections)
     vis_img.save(f"{template_dir}/cnos_results/vis.png")
-    
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--template_dir", nargs="?", help="Path to root directory of the template")
-    parser.add_argument("--rgb_path", nargs="?", help="Path to RGB image")
-    parser.add_argument("--num_max_dets", nargs="?", default=1, type=int, help="Number of max detections")
-    parser.add_argument("--confg_threshold", nargs="?", default=0.5, type=float, help="Confidence threshold")
-    parser.add_argument("--stability_score_thresh", nargs="?", default=0.97, type=float, help="stability_score_thresh of SAM")
+    parser.add_argument("--config", type=str, default=str(Path(__file__).resolve().parents[2] / "configs" / "config.json"))
+    parser.add_argument("--template_dir", nargs="?")  # still allow overrides
+    parser.add_argument("--rgb_path", nargs="?")
+    parser.add_argument("--num_max_dets", nargs="?", default=None, type=int)
+    parser.add_argument("--conf_threshold", nargs="?", default=None, type=float)
+    parser.add_argument("--stability_score_thresh", nargs="?", default=None, type=float)
     args = parser.parse_args()
 
-    os.makedirs(f"{args.template_dir}/cnos_results", exist_ok=True)
-    run_inference(args.template_dir, args.rgb_path, num_max_dets=args.num_max_dets, conf_threshold=args.confg_threshold, stability_score_thresh=args.stability_score_thresh)
+    with open(args.config) as f:
+        cfg = json.load(f)
+
+    template_dir = _resolve(cfg["paths"]["templates_out"] if args.template_dir is None else args.template_dir)
+    results_out  = _resolve(cfg["paths"].get("results_out", template_dir))  # default next to templates
+    os.makedirs(f"{template_dir}/cnos_results", exist_ok=True)
+
+    # single image or batch via glob
+    if args.rgb_path is not None:
+        rgb_list = [ _resolve(args.rgb_path) ]
+    else:
+        if cfg["paths"].get("single_rgb_path"):
+            rgb_list = [ _resolve(cfg["paths"]["single_rgb_path"]) ]
+        else:
+            rgb_list = sorted([str(p) for p in Path().glob(cfg["paths"]["rgb_glob"])]) if cfg["paths"].get("rgb_glob") else []
+    if not rgb_list:
+        raise SystemExit("No RGB inputs found. Set paths.single_rgb_path or paths.rgb_glob in config, or pass --rgb_path.")
+
+    num_max_dets = args.num_max_dets if args.num_max_dets is not None else cfg["inference"]["num_max_dets"]
+    conf_thr     = args.conf_threshold if args.conf_threshold is not None else cfg["inference"]["conf_threshold"]
+    stab_thr     = args.stability_score_thresh if args.stability_score_thresh is not None else cfg["inference"]["stability_score_thresh"]
+
+    # run for each image
+    for rgb in rgb_list:
+        print(f"[infer] templates={template_dir}  rgb={rgb}")
+        run_inference(template_dir, rgb, num_max_dets=num_max_dets,
+                      conf_threshold=conf_thr, stability_score_thresh=stab_thr)

@@ -7,11 +7,17 @@ import numpy as np
 import os.path as osp
 from tqdm import tqdm
 import argparse
+import json
+from pathlib import Path
 from src.utils.trimesh_utils import as_mesh
 from src.utils.trimesh_utils import get_obj_diameter
 os.environ["DISPLAY"] = ":1"
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 
+
+def _resolve(p):
+    p = Path(p)
+    return str((Path(__file__).resolve().parents[2] / p).resolve() if not p.is_absolute() else p)
 
 def render(
     mesh,
@@ -61,72 +67,91 @@ def render(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=str(Path(__file__).resolve().parents[2] / "configs" / "config.json"))
+    # legacy positional args still supported but optional now:
     parser.add_argument("cad_path", nargs="?", help="Path to the model file")
-    parser.add_argument("obj_pose", nargs="?", help="Path to the model file")
-    parser.add_argument(
-        "output_dir", nargs="?", help="Path to where the final files will be saved"
-    )
+    parser.add_argument("obj_pose", nargs="?", help="Path to the pose npy")
+    parser.add_argument("output_dir", nargs="?", help="Where to save PNGs")
     parser.add_argument("gpus_devices", nargs="?", help="GPU devices")
-    parser.add_argument("disable_output", nargs="?", help="Disable output of blender")
-    parser.add_argument("light_itensity", nargs="?", type=float, default=0.6, help="Light itensity")
-    parser.add_argument("radius", nargs="?", type=float, default=1, help="Distance from camera to object")
+    parser.add_argument("disable_output", nargs="?", help="Unused")
+    parser.add_argument("light_itensity", nargs="?", type=float, default=0.6)
+    parser.add_argument("radius", nargs="?", type=float, default=1.0)
     args = parser.parse_args()
-    print(args)
-    is_hot3d = "hot3d" in args.output_dir
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus_devices
-    poses = np.load(args.obj_pose)
-    # we can increase high energy for lightning but it's simpler to change just scale of the object to meter
-    # poses[:, :3, :3] = poses[:, :3, :3] / 1000.0
+
+    # ---- load config ----
+    with open(args.config) as f:
+        cfg = json.load(f)
+
+    cad_path      = _resolve(cfg["paths"]["cad_path"]     if args.cad_path is None   else args.cad_path)
+    poses_path    = _resolve(cfg["paths"]["poses_path"]   if args.obj_pose is None   else args.obj_pose)
+    output_dir    = _resolve(cfg["paths"]["templates_out"]if args.output_dir is None else args.output_dir)
+
+    gpus_devices  = cfg["render"].get("gpus_devices", "0") if args.gpus_devices is None else args.gpus_devices
+    light_int     = cfg["render"].get("lighting_intensity", 0.6) if args.light_itensity == 0.6 else args.light_itensity
+    radius        = cfg["render"].get("radius", 1.0) if args.radius == 1.0 else args.radius
+    intrinsic     = np.array(cfg["render"]["intrinsics"], dtype=np.float32)
+    img_size      = cfg["render"]["img_size"]  # [H,W]
+
+    print(f"[render] cad={cad_path}\n[render] poses={poses_path}\n[render] out={output_dir}")
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpus_devices)
+    is_hot3d = "hot3d" in output_dir
+
+    poses = np.load(poses_path)
     poses[:, :3, 3] = poses[:, :3, 3] / 1000.0
-    if args.radius != 1:
-        poses[:, :3, 3] = poses[:, :3, 3] * args.radius
-    if "tless" in args.output_dir:
-        intrinsic = np.asarray(
-            [1075.65091572, 0.0, 360, 0.0, 1073.90347929, 270, 0.0, 0.0, 1.0]
-        ).reshape(3, 3)
-        img_size = [540, 720]
-        is_tless = True
-    else:
-        intrinsic = np.array(
-            [[572.4114, 0.0, 325.2611], [0.0, 573.57043, 242.04899], [0.0, 0.0, 1.0]]
-        )
-        img_size = [480, 640]
-        is_tless = False
+    if radius != 1.0:
+        poses[:, :3, 3] *= radius
 
-    # load mesh to meter
-    mesh = trimesh.load_mesh(args.cad_path)
+    # --- Load OBJ+MTL+textures as a Scene to preserve materials/UVs ---
+    tm = trimesh.load(cad_path, force='scene', skip_materials=False)
 
-    # re-center objects at the origin
+    # --- Build a single Trimesh in world coords for measurements ---
+    def _combined_trimesh(scene_or_mesh):
+        if isinstance(scene_or_mesh, trimesh.Scene):
+            # Prefer new API; fall back to deprecated dump(concatenate=True)
+            try:
+                geoms_world = list(scene_or_mesh.to_geometry())  # list[Trimesh] in world coords
+                return trimesh.util.concatenate(geoms_world)
+            except Exception:
+                return scene_or_mesh.dump(concatenate=True)
+        else:
+            return scene_or_mesh  # already a Trimesh
+
+    combined = _combined_trimesh(tm)
+
+    # --- Decide units using bbox diagonal (approx. diameter) ---
+    diameter = float(np.linalg.norm(combined.bounding_box.extents))  # ~bbox diagonal length
+    # If the object is likely in millimeters, convert scene to meters
+    if not is_hot3d and diameter > 100.0:  # heuristic: > 100 means probably mm
+        scale = 0.001
+        if isinstance(tm, trimesh.Scene):
+            for g in tm.geometry.values():
+                g.apply_scale(scale)
+        else:
+            tm.apply_scale(scale)
+        # recompute combined *after* scaling
+        combined = _combined_trimesh(tm)
+
+    # --- Recenter AFTER scaling so translation is correct ---
+    center = combined.bounding_box.centroid
     re_center_transform = np.eye(4)
-    re_center_transform[:3, 3] = -mesh.bounding_box.centroid
-    print(f"Object center at {mesh.bounding_box.centroid}")
+    re_center_transform[:3, 3] = -center
+    print(f"Object center (scaled) at {center}")
 
-    diameter = get_obj_diameter(mesh)
-    if not is_hot3d and diameter > 100: # object is in mm
-        mesh.apply_scale(0.001)
-
-    if is_tless:
-        # setting uniform colors for mesh
-        color = 0.4
-        mesh.visual.face_colors = np.ones((len(mesh.faces), 3)) * color
-        mesh.visual.vertex_colors = np.ones((len(mesh.vertices), 3)) * color
-        mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
-    elif is_hot3d:
-        mesh = pyrender.Mesh.from_trimesh(list(mesh.geometry.values())[0])
-        if "obj_000023" not in args.cad_path:
-            ## Rescale mesh vertices to be as same unit as the other dataset values
-            ## obj_000023 is skipped as its already in meters.
-            geometry = mesh.primitives[0].positions
-            mesh.primitives[0].positions = geometry * 0.001
+    # --- Convert to pyrender.Mesh while keeping textures/materials ---
+    if isinstance(tm, trimesh.Scene):
+        geoms = list(tm.geometry.values())  # keep TextureVisuals
+        mesh = pyrender.Mesh.from_trimesh(geoms, smooth=False)
     else:
-        mesh = pyrender.Mesh.from_trimesh(as_mesh(mesh))
-    os.makedirs(args.output_dir, exist_ok=True)
+        mesh = pyrender.Mesh.from_trimesh(tm, smooth=False)
+
+    os.makedirs(output_dir, exist_ok=True)
     render(
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         mesh=mesh,
         obj_poses=poses,
         intrinsic=intrinsic,
-        img_size=(480, 640),
-        light_itensity=args.light_itensity,
+        img_size=img_size,                  # <- use config
+        light_itensity=light_int,
         re_center_transform=re_center_transform,
     )
