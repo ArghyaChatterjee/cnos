@@ -20,6 +20,8 @@ Please make sure that you update this [user's configuration](https://github.com/
 
 ### Create conda environment
 ```
+git clone https://github.com/ArghyaChatterjee/cnos.git
+cd cnos
 source ~/miniconda3/bin/activate
 conda env create -f environment.yml
 conda activate cnos
