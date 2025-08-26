@@ -96,7 +96,7 @@ You can run CNOS on your custom dataset given a RGB image and the CAD model of t
 
 ![qualitative](./media/demo/result.png)
 
-Change the file path inside `configs/config.json`.
+Change the file path inside `configs/config.json`. If you want to use Fast-SAM instead of SAM, inside `config.json` file of `config` folder, change `model: cnos` to `model: cnos_fast`. 
 
 Download model weights of [Segmenting Anything](https://github.com/facebookresearch/segment-anything):
 ```
