@@ -94,7 +94,7 @@ python -m src.scripts.download_train_pbr_bop23
 ##  Testing on custom datasets:
 You can run CNOS on your custom dataset given a RGB image and the CAD model of the target object. 
 
-![qualitative](./media/demo/result.png)
+![qualitative](./media/vis.png)
 
 Change the file path inside `configs/config.json`. If you want to use Fast-SAM instead of SAM, inside `config.json` file of `config` folder, change `model: cnos` to `model: cnos_fast`. 
 
